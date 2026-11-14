@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Truk Box Simulator 3D - RHD</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body oncontextmenu="return false;">
+
+<div id="rotateHint">
+  <h2 style="color:#fbbf24; margin-bottom:8px;">PUTAR HP KE MODE LANDSCAPE</h2>
+  <p style="font-size:14px; color:#cbd5e1;">Gunakan layar mendatar untuk pengalaman kokpit truk setir kanan terbaik.</p>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="hud">
+  <div class="top-bar">
+    <div class="top-controls interactive">
+      <button class="btn-mini" id="btnCam">KAMERA: KOKPIT (RHD)</button>
+      <button class="btn-mini" id="btnWeather">CUACA: CERAH</button>
+      <button class="btn-mini" id="btnTime">WAKTU: SIANG</button>
+      <button class="btn-mini active" id="btnSound">SUARA: ON</button>
+      <button class="btn-mini" id="btnFull">LAYAR PENUH</button>
+    </div>
+
+    <div class="cluster">
+      <div class="indicators">
+        <span class="ind" id="indLeft">◀</span>
+        <span class="ind on-red" id="indBrake">(!)</span>
+        <span class="ind" id="indBeam">💡</span>
+        <span class="ind" id="indRight">▶</span>
+      </div>
+      <div class="gear-display" id="gearDisp">N</div>
+      <div class="gauge-box">
+        <div class="gauge-val" id="speedDisp">0</div>
+        <div class="gauge-lbl">KM/H</div>
+      </div>
+      <div class="gauge-box">
+        <div class="gauge-val" id="rpmDisp" style="color:#f59e0b;">800</div>
+        <div class="gauge-lbl">RPM</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast">INJAK KOPLING UNTUK OPER GIGI!</div>
+
+  <div class="switch-panel interactive">
+    <div class="switch-row">
+      <button class="sw-btn on" id="swEngine">MESIN: ON</button>
+      <button class="sw-btn warn" id="swHandbrake">REM TANGAN</button>
+    </div>
+    <div class="switch-row">
+      <button class="sw-btn" id="swLeft">◀ SEIN</button>
+      <button class="sw-btn" id="swHazard">⚠ HAZARD</button>
+      <button class="sw-btn" id="swRight">SEIN ▶</button>
+    </div>
+    <div class="switch-row">
+      <button class="sw-btn" id="swWiper">WIPER: OFF</button>
+      <button class="sw-btn" id="swLight">LAMPU: OFF</button>
+    </div>
+  </div>
+
+  <div class="shifter-box interactive" id="shifterBox">
+    <button class="gear-btn" data-gear="1">1</button>
+    <button class="gear-btn" data-gear="3">3</button>
+    <button class="gear-btn" data-gear="5">5</button>
+    <button class="gear-btn" data-gear="2">2</button>
+    <button class="gear-btn" data-gear="4">4</button>
+    <button class="gear-btn" data-gear="-1" style="color:#f87171;">R</button>
+    <button class="gear-btn active" data-gear="0" style="grid-column: span 3; height: 28px;">NETRAL (N)</button>
+  </div>
+
+  <div class="pedals-box interactive">
+    <div class="pedal" id="pedalClutch">
+      <span>KOPLING</span>
+      <div class="pedal-lines"></div>
+    </div>
+    <div class="pedal" id="pedalBrake">
+      <span>REM</span>
+      <div class="pedal-lines"></div>
+    </div>
+    <div class="pedal" id="pedalGas">
+      <span>GAS</span>
+      <div class="pedal-lines"></div>
+    </div>
+  </div>
+
+  <div class="steering-zone interactive" id="steerZone">
+    <div id="wheelVisual">
+      <div class="spoke-left"></div>
+      <div class="spoke-right"></div>
+      <div class="spoke-bottom"></div>
+    </div>
+    <button id="hornBtn" class="interactive">
+      <span style="font-size:15px;">📯</span>
+      <span>KLAKSON</span>
+    </button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js" onerror="this.onerror=null;this.src='https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';"></script>
+<script src="audio.js"></script>
+<script src="scene3d.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
