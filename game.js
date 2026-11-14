@@ -1,5 +1,7 @@
 window.addEventListener('pointerdown', () => audio.init());
 
+let clutchHeld = false;
+
 function bindPedal(elId, stateKey, onReleaseCallback = null) {
   const el = document.getElementById(elId);
   let activePid = null;
@@ -8,14 +10,22 @@ function bindPedal(elId, stateKey, onReleaseCallback = null) {
     e.stopPropagation();
     el.setPointerCapture(e.pointerId);
     activePid = e.pointerId;
-    state[stateKey] = 1;
+    if (stateKey === 'clutch') {
+      clutchHeld = true;
+    } else {
+      state[stateKey] = 1;
+    }
     el.classList.add('pressed');
   });
 
   const release = e => {
     if (e.pointerId !== activePid) return;
     activePid = null;
-    state[stateKey] = 0;
+    if (stateKey === 'clutch') {
+      clutchHeld = false;
+    } else {
+      state[stateKey] = 0;
+    }
     el.classList.remove('pressed');
     if (onReleaseCallback) onReleaseCallback();
   };
@@ -112,7 +122,7 @@ swEngine.addEventListener('pointerdown', () => {
   audio.playClick(state.engineOn);
   swEngine.textContent = state.engineOn ? 'MESIN: ON' : 'MESIN: OFF';
   swEngine.classList.toggle('on', state.engineOn);
-  if (state.engineOn) state.rpm = 800;
+  if (state.engineOn) state.rpm = 850;
 });
 
 const swHandbrake = document.getElementById('swHandbrake');
@@ -171,9 +181,9 @@ swLight.addEventListener('pointerdown', () => {
   swLight.classList.toggle('on', state.lightMode > 0);
   document.getElementById('indBeam').classList.toggle('on-blue', state.lightMode > 0);
 
-  headSpot.intensity = state.lightMode === 0 ? 0 : (state.lightMode === 1 ? 1.8 : 3.2);
-  headSpot.distance = state.lightMode === 2 ? 95 : 55;
-  const hlColor = state.lightMode > 0 ? 0xfef9c3 : 0x334155;
+  headSpot.intensity = state.lightMode === 0 ? 0 : (state.lightMode === 1 ? 2.0 : 3.5);
+  headSpot.distance = state.lightMode === 2 ? 105 : 65;
+  const hlColor = state.lightMode > 0 ? 0xfef9c3 : 0x475569;
   headLightMatL.color.setHex(hlColor);
   headLightMatR.color.setHex(hlColor);
 });
@@ -198,17 +208,12 @@ btnTime.addEventListener('pointerdown', () => {
   btnTime.textContent = state.timeOfDay === 'day' ? 'WAKTU: SIANG' : 'WAKTU: MALAM';
   btnTime.classList.toggle('active', state.timeOfDay === 'night');
 
-  if (state.timeOfDay === 'night') {
-    scene.background.setHex(0x090d16);
-    scene.fog.color.setHex(0x090d16);
-    hemiLight.intensity = 0.22;
-    dirLight.intensity = 0.12;
-  } else {
-    scene.background.setHex(0x87ceeb);
-    scene.fog.color.setHex(0x87ceeb);
-    hemiLight.intensity = 0.95;
-    dirLight.intensity = 0.9;
-  }
+  const isNight = state.timeOfDay === 'night';
+  skyMat.map = createSkyTexture(isNight);
+  skyMat.needsUpdate = true;
+  scene.fog.color.setHex(isNight ? 0x090d16 : 0xbae6fd);
+  hemiLight.intensity = isNight ? 0.25 : 1.05;
+  dirLight.intensity = isNight ? 0.14 : 1.05;
 });
 
 const btnSound = document.getElementById('btnSound');
@@ -228,41 +233,80 @@ btnFull.addEventListener('pointerdown', () => {
   }
 });
 
+// Cari titik spawn aman di ujung cakrawala depan (minimal 45m dari AI lain)
+function getSafeSpawnZ(laneX) {
+  let candidateZ = state.posZ - 265 - Math.random() * 75;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    let conflict = false;
+    for (let j = 0; j < trafficCars.length; j++) {
+      const other = trafficCars[j];
+      if (other.laneX === laneX && Math.abs(other.mesh.position.z - candidateZ) < 45) {
+        conflict = true;
+        break;
+      }
+    }
+    if (!conflict) break;
+    candidateZ -= 50;
+  }
+  return candidateZ;
+}
+
 let lastTime = performance.now();
 let frameCount = 0;
 
 function updatePhysics(dt) {
+  // 1. Kopling Ramah Layar Sentuh:
+  // Injak cepat (0.11 dtk), lepas bertahap halus (1.15 dtk) agar tidak langsung stall di HP
+  if (clutchHeld) {
+    state.clutch = Math.min(1, state.clutch + dt * 9.0);
+  } else {
+    state.clutch = Math.max(0, state.clutch - dt * 0.85);
+  }
+  const pedalClutchEl = document.getElementById('pedalClutch');
+  if (!clutchHeld && state.clutch > 0.02) {
+    pedalClutchEl.style.transform = `scale(${1 - state.clutch * 0.07}) translateY(${state.clutch * 5}px)`;
+  } else if (!clutchHeld) {
+    pedalClutchEl.style.transform = '';
+  }
+
   const ratio = gearRatios[state.gear];
   const coupling = Math.max(0, 1 - state.clutch);
 
+  // 2. Mesin Diesel & Torsi Idle Merayap (Anti-Stall di Gigi 1 & R)
   if (!state.engineOn) {
     state.rpm = Math.max(0, state.rpm - 900 * dt);
   } else {
-    const freeRpm = 780 + state.throttle * 2420;
+    const freeRpm = 800 + state.throttle * 2400;
     if (state.gear === 0 || coupling < 0.1) {
       state.rpm += (freeRpm - state.rpm) * Math.min(1, dt * 8);
     } else {
-      const wheelRpm = Math.abs(state.speedMS) * 60 / (2 * Math.PI * 0.48) * 4.8 * Math.abs(ratio);
-      const blendedRpm = freeRpm * (1 - coupling) + Math.max(400, wheelRpm) * coupling;
-      state.rpm += (blendedRpm - state.rpm) * Math.min(1, dt * 10);
+      const wheelRpm = Math.abs(state.speedMS) * 60 / (2 * Math.PI * 0.48) * 4.6 * Math.abs(ratio);
+      const isLowGear = Math.abs(state.gear) === 1;
+      const idleAssistRpm = isLowGear && !state.handbrake ? 720 : 380;
+      const blendedRpm = freeRpm * (1 - coupling) + Math.max(idleAssistRpm, wheelRpm) * coupling;
+      state.rpm += (blendedRpm - state.rpm) * Math.min(1, dt * 9);
 
-      if (coupling > 0.7 && state.rpm < 510 && Math.abs(state.speedMS) < 1.3) {
+      // Mesin mati hanya jika rem tangan terkunci atau memaksa jalan dari diam di gigi tinggi (3/4/5)
+      if (coupling > 0.85 && Math.abs(state.speedMS) < 0.8 && state.throttle < 0.1 && (state.handbrake || Math.abs(state.gear) >= 3)) {
         state.engineOn = false;
         swEngine.textContent = 'MESIN: OFF';
         swEngine.classList.remove('on');
-        showToast('MESIN MATI! (Lepas kopling pelan sambil digas)');
+        showToast(state.handbrake ? 'MESIN MATI! Lepas REM TANGAN dulu!' : 'MESIN MATI! Gunakan GIGI 1 untuk mulai jalan!');
       }
     }
   }
 
+  // 3. Gaya Dorong, Merayap Diesel & Pengereman
   let driveForce = 0;
-  if (state.engineOn && state.gear !== 0 && coupling > 0.15) {
-    const torque = (state.throttle * 1.15 + 0.18) * (state.rpm / 1800 + 0.55);
-    driveForce = torque * ratio * coupling * 4.8;
+  if (state.engineOn && state.gear !== 0 && coupling > 0.12) {
+    const isLowGear = Math.abs(state.gear) === 1;
+    const baseDieselCreep = isLowGear ? 0.36 : 0.16;
+    const torque = (state.throttle * 1.15 + baseDieselCreep) * (state.rpm / 1750 + 0.55);
+    driveForce = torque * ratio * coupling * 4.9;
   }
 
-  if (state.gear !== 0 && coupling > 0.3 && state.throttle < 0.05) {
-    driveForce -= Math.sign(state.speedMS) * Math.abs(ratio) * coupling * 1.4;
+  if (state.gear !== 0 && coupling > 0.35 && state.throttle < 0.05 && Math.abs(state.speedMS) > 2.6) {
+    driveForce -= Math.sign(state.speedMS) * Math.abs(ratio) * coupling * 1.3;
   }
 
   const brakeDecel = state.brake * 16 + (state.handbrake ? 14 : 0);
@@ -283,11 +327,11 @@ function updatePhysics(dt) {
     showToast('PERINGATAN: REM TANGAN MASIH AKTIF!');
   }
 
+  // 4. Kemudi Setir Kanan & Pergerakan Truk Tanpa Reset Z Mendadak
   if (steerPid === null && Math.abs(state.speedMS) > 0.4) {
     state.wheelDeg *= Math.pow(0.25, dt);
   }
-  const maxSteerRad = 0.56;
-  const steerAngle = -(state.wheelDeg / 540) * maxSteerRad;
+  const steerAngle = -(state.wheelDeg / 540) * 0.56;
 
   if (Math.abs(state.speedMS) > 0.05) {
     const turnRate = (state.speedMS / 4.2) * Math.sin(steerAngle);
@@ -297,16 +341,69 @@ function updatePhysics(dt) {
   state.posX -= Math.sin(state.heading) * state.speedMS * dt;
   state.posZ -= Math.cos(state.heading) * state.speedMS * dt;
 
-  if (state.posX > 6.6) { state.posX = 6.6; state.heading *= 0.5; state.speedMS *= 0.85; }
-  if (state.posX < -6.6) { state.posX = -6.6; state.heading *= 0.5; state.speedMS *= 0.85; }
+  if (state.posX > 6.4) { state.posX = 6.4; state.heading *= 0.4; state.speedMS *= 0.85; }
+  if (state.posX < -6.4) { state.posX = -6.4; state.heading *= 0.4; state.speedMS *= 0.85; }
 
-  if (state.posZ < -250) {
-    state.posZ += 220;
-    trafficCars.forEach(c => c.mesh.position.z += 220);
-  } else if (state.posZ > 250) {
-    state.posZ -= 220;
-    trafficCars.forEach(c => c.mesh.position.z -= 220);
-  }
+  // Recycle Jalan, Langit & Lingkungan secara mulus mengikuti truk
+  roadMesh.position.z = state.posZ;
+  groundMesh.position.z = state.posZ;
+  skyDome.position.set(state.posX, 0, state.posZ);
+  roadTex.offset.y = -state.posZ / 20;
+
+  envSegments.forEach(seg => {
+    if (seg.position.z - state.posZ > 60) seg.position.z -= 18 * 24;
+    if (seg.position.z - state.posZ < -372) seg.position.z += 18 * 24;
+  });
+
+  // 5. Lalu Lintas AI & Fisika Tumbukan Solid (Anti-Teleport)
+  trafficCars.forEach((c, idx) => {
+    // Jaga jarak antar mobil AI di lajur yang sama
+    let targetSpeed = c.baseSpeed;
+    for (let j = 0; j < trafficCars.length; j++) {
+      if (idx === j) continue;
+      const other = trafficCars[j];
+      if (other.laneX === c.laneX) {
+        const gap = (c.mesh.position.z - other.mesh.position.z) * (-c.dir);
+        if (gap > 0 && gap < 18) targetSpeed = Math.min(targetSpeed, other.speed * 0.85);
+      }
+    }
+    c.speed += (targetSpeed - c.speed) * Math.min(1, dt * 4);
+    c.mesh.position.z += c.dir * c.speed * dt;
+
+    // Respawn hanya jika jauh di belakang (65m) atau jauh di luar kabut depan (380m)
+    const relZ = c.mesh.position.z - state.posZ;
+    if (relZ > 65 || relZ < -380) {
+      c.mesh.position.z = getSafeSpawnZ(c.laneX);
+      c.speed = c.baseSpeed;
+    }
+
+    // Deteksi & Resolusi Tabrakan Solid (Truk tertahan di depan bumper lawan, tidak mental ke belakangnya)
+    const dx = state.posX - c.mesh.position.x;
+    const dz = state.posZ - c.mesh.position.z;
+    const minX = 1.15 + c.halfW;
+    const minZ = 3.35 + c.halfL;
+
+    if (Math.abs(dx) < minX && Math.abs(dz) < minZ) {
+      const penX = minX - Math.abs(dx);
+      const penZ = minZ - Math.abs(dz);
+
+      if (penZ < penX) {
+        const signZ = dz >= 0 ? 1 : -1;
+        state.posZ += signZ * (penZ + 0.06);
+        if (signZ > 0) {
+          state.speedMS = Math.min(0, -Math.abs(state.speedMS) * 0.22);
+        } else {
+          state.speedMS = Math.max(0, Math.abs(state.speedMS) * 0.3);
+        }
+      } else {
+        const signX = dx >= 0 ? 1 : -1;
+        state.posX += signX * (penX + 0.05);
+        state.heading *= 0.35;
+        state.speedMS *= 0.85;
+      }
+      showToast('AWAS TABRAKAN! JAGA JARAK AMAN');
+    }
+  });
 
   truckRoot.position.set(state.posX, 0, state.posZ);
   truckRoot.rotation.y = state.heading;
@@ -315,6 +412,7 @@ function updatePhysics(dt) {
   steering3D.rotation.z = -(state.wheelDeg * Math.PI / 180);
   wheelVisual.style.transform = `rotate(${state.wheelDeg}deg)`;
 
+  // 6. Lampu Sein, Wiper & Kluster Dashboard 3D
   const anyBlink = state.leftBlink || state.rightBlink || state.hazard;
   if (anyBlink) {
     state.blinkTimer += dt;
@@ -339,10 +437,8 @@ function updatePhysics(dt) {
   if (state.weather === 'rain') {
     rainCtx.fillStyle = 'rgba(186, 230, 253, 0.55)';
     for (let i = 0; i < 14; i++) {
-      const rx = Math.random() * 512;
-      const ry = Math.random() * 256;
       rainCtx.beginPath();
-      rainCtx.arc(rx, ry, 2.2, 0, Math.PI * 2);
+      rainCtx.arc(Math.random() * 512, Math.random() * 256, 2.2, 0, Math.PI * 2);
       rainCtx.fill();
     }
     rainTex.needsUpdate = true;
@@ -374,27 +470,17 @@ function updatePhysics(dt) {
     wiperR.rotation.z *= 0.85;
   }
 
-  trafficCars.forEach(c => {
-    c.mesh.position.z += c.dir * c.speed * dt;
-    if (c.mesh.position.z - state.posZ > 180) c.mesh.position.z = state.posZ - 320;
-    if (c.mesh.position.z - state.posZ < -340) c.mesh.position.z = state.posZ + 160;
-
-    const dx = Math.abs(c.mesh.position.x - state.posX);
-    const dz = Math.abs(c.mesh.position.z - state.posZ);
-    if (dx < 1.95 && dz < 5.1) {
-      state.speedMS = -state.speedMS * 0.3;
-      c.mesh.position.z += c.dir * 8;
-      showToast('AWAS TABRAKAN! JAGA JARAK AMAN');
-    }
-  });
-
+  const speedKmh = Math.round(Math.abs(state.speedMS) * 3.6);
   if (state.cameraMode === 'cockpit') {
     cockpitGroup.visible = true;
     exteriorGroup.visible = false;
-    const eyeOffset = new THREE.Vector3(0.46, 2.48, -2.02);
+    const eyeOffset = new THREE.Vector3(0.46, 2.48, -2.0);
     eyeOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), state.heading);
     camera.position.set(state.posX + eyeOffset.x, eyeOffset.y, state.posZ + eyeOffset.z);
-    camera.rotation.set(-0.04, state.heading, 0);
+    camera.rotation.set(-0.05, state.heading, 0);
+    if (frameCount % 2 === 0) {
+      updateDashCluster(speedKmh, state.rpm, state.gear, leftOn, rightOn, state.handbrake || state.brake > 0);
+    }
   } else {
     cockpitGroup.visible = false;
     exteriorGroup.visible = true;
@@ -405,8 +491,7 @@ function updatePhysics(dt) {
   }
 
   audio.updateEngine(state.rpm, state.throttle, state.engineOn);
-
-  document.getElementById('speedDisp').textContent = Math.round(Math.abs(state.speedMS) * 3.6);
+  document.getElementById('speedDisp').textContent = speedKmh;
   document.getElementById('rpmDisp').textContent = Math.round(state.rpm);
 }
 
